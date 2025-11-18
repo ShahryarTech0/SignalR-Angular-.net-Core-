@@ -1,0 +1,109 @@
+header.component.ts::
+_________________________________________________________
+
+import { Component, inject } from '@angular/core';
+import { AuthService } from '../../../core/services/auth.service';
+import { RouterLink } from '@angular/router';
+import * as signalR from '@microsoft/signalr';
+import { CommonModule } from '@angular/common';
+
+@Component({
+  selector: 'app-header',
+  imports: [RouterLink, CommonModule],
+  templateUrl: './header.component.html',
+  styleUrl: './header.component.css',
+})
+export class HeaderComponent {
+  auth: AuthService = inject(AuthService);
+  UserName?: string = this.auth.user?.displayName;
+  userId = this.auth.user?.id
+  connection!: signalR.HubConnection;
+  messages: any[] = [];
+
+  ngOnInit() {
+    if (this.auth.user?.id) {
+      debugger
+      //this.connectToNotifications(this.auth.user.id.toString());
+      this.startConnection(this.auth.user?.id);
+    }
+
+  }
+public startConnection = (userId: number) => {
+        let accessToken = "some token";
+        var options = {
+            transport: signalR.HttpTransportType.ServerSentEvents,
+            logging: signalR.LogLevel.Trace,
+            accessTokenFactory: () => accessToken
+        };
+
+        this.connection = new signalR.HubConnectionBuilder()
+            .withUrl("https://localhost:7250/NotificationHub", options)
+            .build();
+        this.connection.serverTimeoutInMilliseconds = 9999999999999;
+        this.connection.on('ReceiveMessage', (data: string) => {
+            //this.data = data;
+            console.log('AppNotifications data');
+            console.log(data);
+        });
+
+        this.connection
+            .start()
+            .then(() =>console.log('Connection started'))
+            .then(()=>{
+ 
+              console.log(userId)
+              this.connection.invoke("RegisterToGroup",
+                    userId,
+                  ["Enquiry","Complain"]
+                ).then(()=> console.log("Added to Groups"))
+                .catch((err)=> console.log("error connecting group",err));
+                console.log('Ending');
+            })
+            .catch(err => {
+                console.log('Error while starting connection: ', err)
+            });
+           
+    }
+
+//   async connectToNotifications(userId: string) {
+//     this.connection = new signalR.HubConnectionBuilder()
+//       .withUrl("https://localhost:7250/NotificationHub",
+//       {
+//       skipNegotiation: true,  // skipNegotiation as we specify WebSockets
+//       transport: signalR.HttpTransportType.WebSockets  // force WebSocket transport
+//     })
+//       .withAutomaticReconnect()
+//       .configureLogging(signalR.LogLevel.Debug)
+//       .build();
+//       this.connection.serverTimeoutInMilliseconds = 9999999999999;
+// console.log(userId)
+//     this.connection.on('ReceiveMessage', (data: any) => {
+//       debugger
+//       console.log('Notification received:', data);
+//       //this.messages.push(data);
+//     });
+    
+//     this.connection.onclose(error => {
+//       console.error('SignalR closed:', error);
+//     });
+
+//     this.connection
+//             .start()
+//             .then(() =>{
+//               console.log('Testing')
+//               console.log('Connection started')
+//               console.log(this.connection.state);
+              
+
+//             } )
+//             .catch(err => {
+//                 console.log('Error while starting connection: ', err)
+//             })
+//   }
+
+  ngOnDestroy() {
+    if (this.connection) {
+      this.connection.stop().then(() => console.log('SignalR disconnected'));
+    }
+  }
+}

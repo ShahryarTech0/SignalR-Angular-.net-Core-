@@ -1,0 +1,176 @@
+LoginHandler ::
+_________________________
+
+ // Flatten all routes from all roles into one list
+ var userRoutes = userDTO.Roles
+  .SelectMany(role => role.Routes?.OfType<RouteDTO>() ?? Enumerable.Empty<RouteDTO>())
+    .Select(route => route.Name)
+        .Distinct()
+          .ToList();
+
+ // 2. Register user to SignalR groups via NotificationService
+ if (userRoutes.Any())
+ {
+     // Call your notification service to add the user to groups
+     await notificationService.AddUserToGroups(userDTO.Id.ToString(), userRoutes);
+ }
+
+
+
+INotificationService::
+__________________________
+
+public interface INotificationService
+{
+    Task NotifyToGroup(Notification notification, string groupName);
+
+    // Add this method
+    Task NotifyUserAsync(string userId, Notification notification);
+    Task AddUserToGroups(string userId, List<string> groups);
+}
+
+
+
+NotificationService::
+_______________________________
+
+public class NotificationRepository : INotificationService
+{
+    private readonly IHubContext<NotificationHub> _hubContext;
+    public NotificationRepository(IHubContext<NotificationHub> hubContext)
+    {
+        _hubContext = hubContext;
+    }
+
+    public async Task NotifyToGroup(Notification notification, string groupName)
+    {
+        try
+        {
+        await _hubContext.Clients.Group(groupName).SendAsync("ReceiveMessage", JsonConvert.SerializeObject(notification));
+        }
+        catch (Exception)
+        {
+            throw;
+        }
+    }
+
+    public async Task NotifyUserAsync(string userId, Notification notification)
+    {
+        // Use Clients.User if JWT has NameIdentifier claim
+        await _hubContext.Clients.User(userId).SendAsync("ReceiveNotification", notification);
+    }
+
+    public async Task AddUserToGroups(string userId, List<string> groups)
+    {
+        await _hubContext.Clients.User(userId.ToString())
+                                .SendAsync("RegisterToGroup", userId.ToString(), groups);
+    }
+}
+
+
+
+NotificationHub::(inherited with Hub)
+_______________________________________________
+
+ public class NotificationHub : Hub
+ {
+     // Map: UserId -> ConnectionId
+     public static readonly ConcurrentDictionary<int, string> UserConnections = new();
+
+     public override Task OnConnectedAsync()
+     {
+         // Example: get user id from JWT claims
+         if (int.TryParse(Context.UserIdentifier, out int userId))
+         {
+             UserConnections[userId] = Context.ConnectionId;
+             Console.WriteLine($"User {userId} connected with ConnectionId {Context.ConnectionId}");
+         }
+
+         return base.OnConnectedAsync();
+     }
+
+     public override Task OnDisconnectedAsync(Exception? exception)
+     {
+         if (int.TryParse(Context.UserIdentifier, out int userId))
+         {
+             UserConnections.TryRemove(userId, out _);
+             Console.WriteLine($"User {userId} disconnected");
+         }
+
+         return base.OnDisconnectedAsync(exception);
+     }
+
+     public async Task RegisterToGroup(int userId, List<string> groups)
+     {
+         foreach (var group in groups)
+         {
+             await Groups.AddToGroupAsync(Context.ConnectionId, group);
+         }
+     }
+ }
+
+
+
+FromWhereIPostEnquiry::
+____________________________________
+
+ try
+ {
+     // 1. Prepare notification payload
+     var payload = new Notification
+     {
+         Title = "New Enquirey",
+         Message = $"Enquirey has been Occured.",
+         OccurredAt = DateTime.UtcNow,
+     };
+
+     // 2. Notify all users in "Appointments" group
+     await notificationService.NotifyToGroup(payload, RouteType.Enquiry.ToString());
+ }
+ catch (Exception ex)
+ {
+     Console.WriteLine($"[SignalR Warning] Failed to send enquiry notification: {ex.Message}");
+ }
+
+
+InProgram.cs(You need )::
+______________________________________
+
+// Add CORS policy
+builder.Services.AddSignalR(options =>
+{
+    options.EnableDetailedErrors = true;
+});
+builder.Services.AddSingleton<IUserIdProvider, CustomUserIdProvider>();(optional i think , first search for this )
+builder.Services.AddCors(options =>
+{
+    options.AddPolicy("AllowAll", policy =>
+    {
+        policy.WithOrigins("http://127.0.0.1:5501/", "http://localhost:4200/")
+              .AllowAnyHeader()
+              .AllowAnyMethod()
+              .AllowCredentials()
+              .SetIsOriginAllowed(origin => true);
+    });
+});
+
+
+    app.UseCors("AllowAll");
+
+  app.MapHub<NotificationHub>("/NotificationHub");
+
+
+CustomUserIdProvider::(this is optional i think , when you do , first search for this then add)(this is in infra inside singalr folder)
+________________________________________________________________________________________________________________________________________
+
+public class CustomUserIdProvider : IUserIdProvider
+{
+    public string? GetUserId(HubConnectionContext connection)
+    {
+        return connection.User?.FindFirst("id")?.Value;   // <-- uses your "id" claim
+    }
+}
+
+
+
+
